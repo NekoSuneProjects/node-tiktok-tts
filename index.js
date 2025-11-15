@@ -3,7 +3,11 @@
 import fs from "fs";
 import fetch from "node-fetch";
 
-const API_URL = "https://tiktok-tts.weilnet.workers.dev/api/generation";
+const API_URLS = [
+  "https://tiktok-tts.weilnet.workers.dev/api/generation",
+  "https://tiktok-tts.printmechanicalbeltpumpkingutter.workers.dev/api/generation"
+];
+
 const VOICES_URL = "https://raw.githubusercontent.com/VRCWizard/TTS-Voice-Wizard/refs/heads/main/OSCVRCWiz/Assets/voices/tiktokVoices.json";
 
 let AVAILABLE_VOICES = [];
@@ -26,8 +30,9 @@ async function loadVoices() {
   return AVAILABLE_VOICES;
 }
 
+
 /**
- * Call the TikTok TTS API
+ * Call the TikTok TTS API with automatic fallback
  * @param {string} text 
  * @param {string} voiceId 
  * @returns {Promise<string>} Base64 MP3
@@ -35,18 +40,41 @@ async function loadVoices() {
 async function callAPI(text, voiceId) {
   const body = JSON.stringify({ text, voice: voiceId });
 
-  const req = await fetch(API_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
-  });
+  let lastError = null;
 
-  if (req.status !== 200) {
-    throw new Error(`API Error ${req.status}: ${req.statusText}`);
+  for (const api of API_URLS) {
+    try {
+      const req = await fetch(api, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+
+      // HTTP error
+      if (!req.ok) {
+        lastError = new Error(`API Error ${req.status}: ${req.statusText}`);
+        continue;
+      }
+
+      const json = await req.json();
+
+      // TikTok internal error message (invalid session, etc)
+      if (json.error || json.details || json.status_code === 1) {
+        lastError = new Error(
+          `TikTok Error from ${api} -> ${JSON.stringify(json)}`
+        );
+        continue;
+      }
+
+      return json.data; // base64 mp3 (success)
+    } catch (err) {
+      // Network-level or fetch error
+      lastError = err;
+    }
   }
 
-  const json = await req.json();
-  return json.data; // base64 mp3
+  // If both APIs fail
+  throw lastError || new Error("Failed to generate audio (unknown error)");
 }
 
 function writeFile(dirPath, fileName, data, encoding = "utf8") {
